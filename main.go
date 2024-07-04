@@ -12,93 +12,92 @@ type BridgePacket struct {
 	channelID uint8
 }
 
-func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket) {
-	func() {
-		remoteHost, err := enet.NewHost(nil, 1, 1, 0, 0)
-		if err != nil {
-			log.Fatalln("Couldn't create host: %s", err.Error())
-			return
-		}
-		// Connect the client host to the server
-		remote, err := remoteHost.Connect(enet.NewAddress("127.0.0.1", 8888), 1, 0)
-		if err != nil {
-			log.Println("Couldn't connect: %s", err.Error())
-			return
-		}
+func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSignal <-chan bool) {
+	remoteHost, err := enet.NewHost(nil, 32, 256, 0, 0)
+	if err != nil {
+		log.Fatalf("Couldn't create host: %s", err.Error())
+		return
+	}
+	// Connect the client host to the server
+	remote, err := remoteHost.Connect(enet.NewAddress("127.0.0.1", 8888), 256, 0)
+	if err != nil {
+		log.Printf("Couldn't connect to server: %s\n", err.Error())
+		return
+	}
 
-		go func() {
-			for true {
-				select {
-				case bridgePacket := <-packetChan:
-					remote.SendPacket(bridgePacket.packet, bridgePacket.channelID)
+	var closed = false
+
+	go func() {
+		for {
+			select {
+			case bridgePacket := <-packetChan:
+				if err := remote.SendPacket(bridgePacket.packet, bridgePacket.channelID); err != nil {
+					log.Printf("Couldn't send packet to server: %s\n", err.Error())
 					bridgePacket.packet.Destroy()
 				}
+			case <-closeSignal:
+				closed = true
 			}
-		}()
+		}
+	}()
 
-		// The event loop
-		for true {
-			// Wait until the next event
-			ev := remoteHost.Service(1000)
+	for {
+		if closed {
+			break
+		}
+		ev := remoteHost.Service(5000)
+		if ev.GetType() == enet.EventNone {
+			log.Println("Bridge timed out")
+			peer.Disconnect(0)
+			break
+		}
 
-			// Send a ping if we didn't get any event
-			if ev.GetType() == enet.EventNone {
-				continue
-			}
+		switch ev.GetType() {
+		case enet.EventDisconnect:
+			peer.Disconnect(0)
 
-			switch ev.GetType() {
-			case enet.EventConnect: // We connected to the server
-				log.Println("Peer bridged to the server!")
-
-			case enet.EventDisconnect: // We disconnected from the server
-				log.Println("Lost connection to the server!")
-
-			case enet.EventReceive: // The server sent us data
-				packet := ev.GetPacket()
-				peer.SendPacket(packet, ev.GetChannelID())
+		case enet.EventReceive:
+			packet := ev.GetPacket()
+			if err := peer.SendPacket(packet, ev.GetChannelID()); err != nil {
+				log.Printf("Couldn't send packet to client: %s\n", err.Error())
 				packet.Destroy()
 			}
 		}
-		remoteHost.Destroy()
-	}()
+	}
+	remoteHost.Destroy()
 }
 
 func main() {
-	// Initialize enet
 	enet.Initialize()
-
-	// Create a host listening on 0.0.0.0:8095
-	host, err := enet.NewHost(enet.NewListenAddress(20406), 32, 1, 0, 0)
+	host, err := enet.NewHost(enet.NewListenAddress(20406), 1024, 32, 0, 0)
 	if err != nil {
-		log.Fatalln("Couldn't create host: %s", err.Error())
+		log.Fatalf("Couldn't create host: %s\n", err.Error())
 		return
 	}
 
 	log.Println("Server started on 20406")
+	var packetChan = make(chan BridgePacket, 10)
+	var closeSignal = make(chan bool, 10)
 	var wg sync.WaitGroup
 	wg.Add(1)
-	var packetChan = make(chan BridgePacket, 1)
-	// The event loop
 	go func() {
-		for true {
-			// Wait until the next event
-			ev := host.Service(1000)
+		for {
+			ev := host.Service(10)
 
-			// Do nothing if we didn't get any event
 			if ev.GetType() == enet.EventNone {
 				continue
 			}
 
 			switch ev.GetType() {
-			case enet.EventConnect: // A new peer has connected
-				log.Println("New peer connected: %s", ev.GetPeer().GetAddress())
-				go bridgePeerToRemote(ev.GetPeer(), packetChan)
+			case enet.EventConnect:
+				log.Printf("New peer connected: %s\n", ev.GetPeer().GetAddress())
+				go bridgePeerToRemote(ev.GetPeer(), packetChan, closeSignal)
 
-			case enet.EventDisconnect: // A connected peer has disconnected
-				log.Println("Peer disconnected: %s", ev.GetPeer().GetAddress())
+			case enet.EventDisconnect:
+				log.Printf("Peer disconnected: %s\n", ev.GetPeer().GetAddress())
+				closeSignal <- true
 
-			case enet.EventReceive: // A peer sent us some data
-				// Get the packet
+			case enet.EventReceive:
 				packet := ev.GetPacket()
 				packetChan <- BridgePacket{packet, ev.GetChannelID()}
 			}
