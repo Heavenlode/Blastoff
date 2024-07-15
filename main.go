@@ -17,14 +17,12 @@ type BridgePacket struct {
 	channelID uint8
 }
 
-// We define an enum of the different types of packets that can be sent
-type ClientValidationFlag uint8
+type ServerCommandFlag uint8
 
 const (
-	ClientValidationValid ClientValidationFlag = iota
-	ClientValidationRedirect
-	// There may be others in the future, for example:
-	// ClientValidationFlagBanned
+	ServerCommandNewInstance ServerCommandFlag = iota
+	ServerCommandValidateClient
+	ServerCommandRedirectClient
 )
 
 func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSignal <-chan bool) {
@@ -121,15 +119,30 @@ func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSig
 
 		case enet.EventReceive:
 			packet := ev.GetPacket()
-			if !open {
-				// This is the first packet from the remote host
-				// This indicates whether the client has a valid connection or not.
+			if ev.GetChannelID() == 255 {
 				var data = packet.GetData()
 				packet.Destroy()
-				switch ClientValidationFlag(data[0]) {
-				case ClientValidationValid:
+				// This is a special communication packet from the server
+				// The first byte indicates the type of packet
+				switch ServerCommandFlag(data[0]) {
+				case ServerCommandNewInstance:
+					// The server is redirecting the client to another server
+					// The data contains the UUID of the server to redirect to
+					if len(data) < 37 {
+						log.Println("Invalid new instance data")
+						peer.Disconnect(0)
+						break
+					}
+					uuid, err := uuid.FromBytes(data[1:37])
+					if err != nil {
+						log.Printf("Couldn't parse UUID: %s\n", err.Error())
+						peer.Disconnect(0)
+						break
+					}
+					log.Printf("Spawning new instance: %s\n", uuid.String())
+				case ServerCommandValidateClient:
 					open = true
-				case ClientValidationRedirect:
+				case ServerCommandRedirectClient:
 					// The client is being redirected to another server
 					// The data contains the UUID of the server to redirect to
 					if len(data) < 37 {
@@ -153,10 +166,18 @@ func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSig
 					peer.Disconnect(0)
 					break
 				}
-			}
-			if err := peer.SendPacket(packet, ev.GetChannelID()); err != nil {
-				log.Printf("Couldn't send packet to client: %s\n", err.Error())
-				packet.Destroy()
+				continue
+			} else {
+				if !open {
+					// This is a bug. The server should not be sending messages through this stream before the client is validated.
+					log.Println("Client not validated.")
+					peer.Disconnect(0)
+					break
+				}
+				if err := peer.SendPacket(packet, ev.GetChannelID()); err != nil {
+					log.Printf("Couldn't send packet to client: %s\n", err.Error())
+					packet.Destroy()
+				}
 			}
 		}
 	}
