@@ -1,4 +1,4 @@
-package main
+package blastoff
 
 import (
 	"log"
@@ -8,11 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var remoteAddressMap = map[uuid.UUID]enet.Address{
-	uuid.MustParse("8a2773c9-b1c6-4f8f-a4f1-59d5dde00752"): enet.NewAddress("127.0.0.1", 8888),
-}
-
-type BridgePacket struct {
+type bridgePacket struct {
 	packet    enet.Packet
 	channelID uint8
 }
@@ -25,7 +21,27 @@ const (
 	ServerCommandRedirectClient
 )
 
-func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSignal <-chan bool) {
+type BlastoffServer struct {
+	Address          enet.Address
+	remoteAddressMap map[uuid.UUID]enet.Address
+}
+
+func CreateServer(address enet.Address) *BlastoffServer {
+	return &BlastoffServer{
+		Address:          address,
+		remoteAddressMap: make(map[uuid.UUID]enet.Address),
+	}
+}
+
+func NewAddress(ip string, port uint16) enet.Address {
+	return enet.NewAddress(ip, port)
+}
+
+func (server *BlastoffServer) AddRemote(uuid uuid.UUID, address enet.Address) {
+	server.remoteAddressMap[uuid] = address
+}
+
+func (server *BlastoffServer) bridgePeerToRemote(peer enet.Peer, packetChan <-chan bridgePacket, closeSignal <-chan bool) {
 	remoteHost, err := enet.NewHost(nil, 32, 256, 0, 0)
 	if err != nil {
 		log.Fatalf("Couldn't create host: %s", err.Error())
@@ -46,7 +62,7 @@ func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSig
 			case uuid := <-redirectChan:
 				// The client is being redirected to another server
 				remote.Disconnect(0)
-				remote, err = remoteHost.Connect(remoteAddressMap[uuid], 256, 0)
+				remote, err = remoteHost.Connect(server.remoteAddressMap[uuid], 256, 0)
 				if err != nil {
 					log.Printf("Couldn't connect to server: %s\n", err.Error())
 					break root
@@ -56,14 +72,14 @@ func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSig
 					log.Printf("Couldn't send token to server: %s\n", err.Error())
 					break root
 				}
-			case bridgePacket := <-packetChan:
+			case _bridgePacket := <-packetChan:
 				if !open {
 					// Initialize the connection with the remote host.
 					// First, the client sends a packet:
 					// The first part is the UUID of the remote host they wish to connect to
 					// The second part is the token that the remote host will use to verify the connection
-					var data = bridgePacket.packet.GetData()
-					bridgePacket.packet.Destroy()
+					var data = _bridgePacket.packet.GetData()
+					_bridgePacket.packet.Destroy()
 					if len(data) <= 36 {
 						log.Println("Invalid packet data length")
 						break root
@@ -73,13 +89,13 @@ func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSig
 						log.Printf("Couldn't parse UUID: %s\n", err.Error())
 						break root
 					}
-					if _, ok := remoteAddressMap[uuid]; !ok {
+					if _, ok := server.remoteAddressMap[uuid]; !ok {
 						log.Printf("Remote host ID %s not found.", uuid.String())
 						break root
 					}
 					peerToken = data[36:]
 					// Now we connect to the remote
-					remote, err = remoteHost.Connect(remoteAddressMap[uuid], 256, 0)
+					remote, err = remoteHost.Connect(server.remoteAddressMap[uuid], 256, 0)
 					if err != nil {
 						log.Printf("Couldn't connect to server: %s\n", err.Error())
 						break root
@@ -91,9 +107,9 @@ func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSig
 					}
 					continue
 				}
-				if err := remote.SendPacket(bridgePacket.packet, bridgePacket.channelID); err != nil {
+				if err := remote.SendPacket(_bridgePacket.packet, _bridgePacket.channelID); err != nil {
 					log.Printf("Couldn't send packet to server: %s\n", err.Error())
-					bridgePacket.packet.Destroy()
+					_bridgePacket.packet.Destroy()
 				}
 			case <-closeSignal:
 				break root
@@ -156,7 +172,7 @@ func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSig
 						peer.Disconnect(0)
 						break
 					}
-					if _, ok := remoteAddressMap[uuid]; !ok {
+					if _, ok := server.remoteAddressMap[uuid]; !ok {
 						log.Printf("Remote host ID %s not found during redirect.", uuid.String())
 						peer.Disconnect(0)
 						break
@@ -184,7 +200,7 @@ func bridgePeerToRemote(peer enet.Peer, packetChan <-chan BridgePacket, closeSig
 	remoteHost.Destroy()
 }
 
-func main() {
+func (server *BlastoffServer) Start() {
 	enet.Initialize()
 	host, err := enet.NewHost(enet.NewListenAddress(20406), 1024, 32, 0, 0)
 	if err != nil {
@@ -193,7 +209,7 @@ func main() {
 	}
 
 	log.Println("Server started on 20406")
-	var packetChan = make(chan BridgePacket, 10)
+	var packetChan = make(chan bridgePacket, 10)
 	var closeSignal = make(chan bool, 10)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -208,7 +224,7 @@ func main() {
 			switch ev.GetType() {
 			case enet.EventConnect:
 				log.Printf("New peer connected: %s\n", ev.GetPeer().GetAddress())
-				go bridgePeerToRemote(ev.GetPeer(), packetChan, closeSignal)
+				go server.bridgePeerToRemote(ev.GetPeer(), packetChan, closeSignal)
 
 			case enet.EventDisconnect:
 				log.Printf("Peer disconnected: %s\n", ev.GetPeer().GetAddress())
@@ -216,7 +232,7 @@ func main() {
 
 			case enet.EventReceive:
 				packet := ev.GetPacket()
-				packetChan <- BridgePacket{packet, ev.GetChannelID()}
+				packetChan <- bridgePacket{packet, ev.GetChannelID()}
 			}
 		}
 		wg.Done()

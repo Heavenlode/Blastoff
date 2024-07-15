@@ -1,4 +1,4 @@
-module github.com/heavenlode/blastoff
+module github.com/Heavenlode/Blastoff
 
 go 1.22.5
 
