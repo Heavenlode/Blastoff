@@ -8,24 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-type bridgePacket struct {
-	packet    enet.Packet
-	channelID uint8
-}
-
-type ServerCommandFlag uint8
-
-const (
-	ServerCommandNewInstance ServerCommandFlag = iota
-	ServerCommandValidateClient
-	ServerCommandRedirectClient
-)
-
-type BlastoffServer struct {
-	Address          enet.Address
-	remoteAddressMap map[uuid.UUID]enet.Address
-}
-
 func CreateServer(address enet.Address) *BlastoffServer {
 	return &BlastoffServer{
 		Address:          address,
@@ -41,179 +23,21 @@ func (server *BlastoffServer) AddRemote(uuid uuid.UUID, address enet.Address) {
 	server.remoteAddressMap[uuid] = address
 }
 
-func (server *BlastoffServer) bridgePeerToRemote(peer enet.Peer, packetChan <-chan bridgePacket, closeSignal <-chan bool) {
-	remoteHost, err := enet.NewHost(nil, 32, 256, 0, 0)
-	if err != nil {
-		log.Fatalf("Couldn't create host: %s", err.Error())
-		return
-	}
-	var closed = false
-	var open = false
-	var peerToken []byte
-
-	var redirectChan = make(chan uuid.UUID, 1)
-
-	go func() {
-		// Connect the client host to the server
-		var remote enet.Peer
-	root:
-		for {
-			select {
-			case uuid := <-redirectChan:
-				// The client is being redirected to another server
-				remote.Disconnect(0)
-				remote, err = remoteHost.Connect(server.remoteAddressMap[uuid], 256, 0)
-				if err != nil {
-					log.Printf("Couldn't connect to server: %s\n", err.Error())
-					break root
-				}
-				err = remote.SendBytes(peerToken, 255, enet.PacketFlagReliable)
-				if err != nil {
-					log.Printf("Couldn't send token to server: %s\n", err.Error())
-					break root
-				}
-			case _bridgePacket := <-packetChan:
-				if !open {
-					// Initialize the connection with the remote host.
-					// First, the client sends a packet:
-					// The first part is the UUID of the remote host they wish to connect to
-					// The second part is the token that the remote host will use to verify the connection
-					var data = _bridgePacket.packet.GetData()
-					_bridgePacket.packet.Destroy()
-					if len(data) <= 36 {
-						log.Println("Invalid packet data length")
-						break root
-					}
-					uuid, err := uuid.FromBytes(data[:36])
-					if err != nil {
-						log.Printf("Couldn't parse UUID: %s\n", err.Error())
-						break root
-					}
-					if _, ok := server.remoteAddressMap[uuid]; !ok {
-						log.Printf("Remote host ID %s not found.", uuid.String())
-						break root
-					}
-					peerToken = data[36:]
-					// Now we connect to the remote
-					remote, err = remoteHost.Connect(server.remoteAddressMap[uuid], 256, 0)
-					if err != nil {
-						log.Printf("Couldn't connect to server: %s\n", err.Error())
-						break root
-					}
-					err = remote.SendBytes(peerToken, 255, enet.PacketFlagReliable)
-					if err != nil {
-						log.Printf("Couldn't send token to server: %s\n", err.Error())
-						break root
-					}
-					continue
-				}
-				if err := remote.SendPacket(_bridgePacket.packet, _bridgePacket.channelID); err != nil {
-					log.Printf("Couldn't send packet to server: %s\n", err.Error())
-					_bridgePacket.packet.Destroy()
-				}
-			case <-closeSignal:
-				break root
-			}
-		}
-		closed = true
-	}()
-
-	for {
-		if closed {
-			break
-		}
-		ev := remoteHost.Service(5000)
-		if ev.GetType() == enet.EventNone {
-			log.Println("Bridge timed out")
-			peer.Disconnect(0)
-			break
-		}
-
-		switch ev.GetType() {
-		case enet.EventDisconnect:
-			peer.Disconnect(0)
-
-		case enet.EventReceive:
-			packet := ev.GetPacket()
-			if ev.GetChannelID() == 255 {
-				var data = packet.GetData()
-				packet.Destroy()
-				// This is a special communication packet from the server
-				// The first byte indicates the type of packet
-				switch ServerCommandFlag(data[0]) {
-				case ServerCommandNewInstance:
-					// The server is redirecting the client to another server
-					// The data contains the UUID of the server to redirect to
-					if len(data) < 37 {
-						log.Println("Invalid new instance data")
-						peer.Disconnect(0)
-						break
-					}
-					uuid, err := uuid.FromBytes(data[1:37])
-					if err != nil {
-						log.Printf("Couldn't parse UUID: %s\n", err.Error())
-						peer.Disconnect(0)
-						break
-					}
-					log.Printf("Spawning new instance: %s\n", uuid.String())
-				case ServerCommandValidateClient:
-					open = true
-				case ServerCommandRedirectClient:
-					// The client is being redirected to another server
-					// The data contains the UUID of the server to redirect to
-					if len(data) < 37 {
-						log.Println("Invalid redirect data length")
-						peer.Disconnect(0)
-						break
-					}
-					uuid, err := uuid.FromBytes(data[1:37])
-					if err != nil {
-						log.Printf("Couldn't parse UUID: %s\n", err.Error())
-						peer.Disconnect(0)
-						break
-					}
-					if _, ok := server.remoteAddressMap[uuid]; !ok {
-						log.Printf("Remote host ID %s not found during redirect.", uuid.String())
-						peer.Disconnect(0)
-						break
-					}
-				default:
-					log.Println("Client validation failed")
-					peer.Disconnect(0)
-					break
-				}
-				continue
-			} else {
-				if !open {
-					// This is a bug. The server should not be sending messages through this stream before the client is validated.
-					log.Println("Client not validated.")
-					peer.Disconnect(0)
-					break
-				}
-				if err := peer.SendPacket(packet, ev.GetChannelID()); err != nil {
-					log.Printf("Couldn't send packet to client: %s\n", err.Error())
-					packet.Destroy()
-				}
-			}
-		}
-	}
-	remoteHost.Destroy()
-}
-
 func (server *BlastoffServer) Start() {
 	enet.Initialize()
-	host, err := enet.NewHost(enet.NewListenAddress(20406), 1024, 32, 0, 0)
+	host, err := enet.NewHost(server.Address, 1024, 32, 0, 0)
 	if err != nil {
 		log.Fatalf("Couldn't create host: %s\n", err.Error())
 		return
 	}
 
-	log.Println("Server started on 20406")
-	var packetChan = make(chan bridgePacket, 10)
-	var closeSignal = make(chan bool, 10)
+	log.Printf("Server started %s:%d\n", server.Address.String(), server.Address.GetPort())
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
+
+		// The main Blastoff server loop
+		// These peers are attempting to connect to remotes
 		for {
 			ev := host.Service(10)
 
@@ -224,15 +48,30 @@ func (server *BlastoffServer) Start() {
 			switch ev.GetType() {
 			case enet.EventConnect:
 				log.Printf("New peer connected: %s\n", ev.GetPeer().GetAddress())
-				go server.bridgePeerToRemote(ev.GetPeer(), packetChan, closeSignal)
+				server.peerMap[ev.GetPeer()] = peerData{
+					Peer:          ev.GetPeer(),
+					PacketChannel: make(chan bridgePacket, 10),
+					CloseSignal:   make(chan bool, 10),
+				}
+				go server.bridgePeerToRemote(ev.GetPeer(), server.peerMap[ev.GetPeer()].PacketChannel, server.peerMap[ev.GetPeer()].CloseSignal)
 
 			case enet.EventDisconnect:
 				log.Printf("Peer disconnected: %s\n", ev.GetPeer().GetAddress())
-				closeSignal <- true
+				server.peerMap[ev.GetPeer()].CloseSignal <- true
+				delete(server.peerMap, ev.GetPeer())
 
 			case enet.EventReceive:
-				packet := ev.GetPacket()
-				packetChan <- bridgePacket{packet, ev.GetChannelID()}
+				if ev.GetChannelID() == RemoteAdminChannelId {
+					// Discard messages on this channel, because this is for remotes to communicate with Blastoff
+					// If we were to forward this message to a remote, it would be misinterpreted as a message from Blastoff
+					// Rather than a bridged client message
+					ev.GetPacket().Destroy()
+					log.Printf("Warning: discarded illegal client message")
+				} else {
+					packet := ev.GetPacket()
+					// Forward all other client messages to the remote
+					server.peerMap[ev.GetPeer()].PacketChannel <- bridgePacket{packet, ev.GetChannelID()}
+				}
 			}
 		}
 		wg.Done()
