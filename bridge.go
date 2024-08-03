@@ -8,11 +8,13 @@ import (
 )
 
 func (server *BlastoffServer) bridgePeerToRemote(peer enet.Peer, peerIncomingPacket <-chan bridgePacket, closeSignal <-chan bool) {
-	remoteHost, err := enet.NewHost(nil, 32, 256, 0, 0)
+	remoteHost, err := enet.NewHost(nil, 100, 0, 0, 0)
+	var remotePeer enet.Peer
 	if err != nil {
 		log.Fatalf("Couldn't create host: %s", err.Error())
 		return
 	}
+	remoteHost.CompressWithRangeCoder()
 	var closed = false
 	var peerValidated = false
 	var peerToken []byte
@@ -20,21 +22,19 @@ func (server *BlastoffServer) bridgePeerToRemote(peer enet.Peer, peerIncomingPac
 	var redirectChan = make(chan uuid.UUID, 1)
 
 	go func() {
-		var remote enet.Peer
-
 		// Handle messages to and from the client
 	peerLoop:
 		for {
 			select {
 			case uuid := <-redirectChan:
 				// The server has indicated that the client should be redirected to another server
-				remote.Disconnect(0)
-				remote, err = remoteHost.Connect(server.remoteAddressMap[uuid], 256, 0)
+				remotePeer.Disconnect(0)
+				remotePeer, err = remoteHost.Connect(server.remoteAddressMap[uuid], 0, 0)
 				if err != nil {
 					log.Printf("Couldn't connect to server: %s\n", err.Error())
 					break peerLoop
 				}
-				err = remote.SendBytes(peerToken, RemoteAdminChannelId, enet.PacketFlagReliable)
+				err = remotePeer.SendBytes(peerToken, RemoteAdminChannelId, enet.PacketFlagReliable)
 				if err != nil {
 					log.Printf("Couldn't send token to server: %s\n", err.Error())
 					break peerLoop
@@ -42,42 +42,36 @@ func (server *BlastoffServer) bridgePeerToRemote(peer enet.Peer, peerIncomingPac
 			case peerPacket := <-peerIncomingPacket:
 				if peerValidated {
 					// If the peer is already validated, we simply send the packet to the remote
-					if err := remote.SendPacket(peerPacket.packet, peerPacket.channelID); err != nil {
+					if err := remotePeer.SendPacket(peerPacket.packet, peerPacket.channelID); err != nil {
 						log.Printf("Couldn't send packet to server: %s\n", err.Error())
 						peerPacket.packet.Destroy()
 					}
 					break
 				}
-
 				// Initialize the connection with the remote host.
 				// First, the client sends a packet:
 				// The first part is the UUID of the remote host they wish to connect to
 				// The second part is the token that the remote host will use to verify the connection
 				var data = peerPacket.packet.GetData()
 				peerPacket.packet.Destroy()
-				if len(data) <= 36 {
-					log.Println("Invalid packet data length")
-					break peerLoop
-				}
-				uuid, err := uuid.FromBytes(data[:36])
-				if err != nil {
-					log.Printf("Couldn't parse UUID: %s\n", err.Error())
-					break peerLoop
-				}
-				if _, ok := server.remoteAddressMap[uuid]; !ok {
-					log.Printf("Remote host ID %s not found.", uuid.String())
-					break peerLoop
-				}
-				peerToken = data[36:]
+				// if len(data) <= 36 {
+				// 	log.Println("Invalid packet data length")
+				// 	break peerLoop
+				// }
+				// uuid, err := uuid.Parse(string(data[:36]))
+				// if err != nil {
+				// 	log.Printf("Couldn't parse UUID: %s\n", err.Error())
+				// 	break peerLoop
+				// }
+				// if _, ok := server.remoteAddressMap[uuid]; !ok {
+				// 	log.Printf("Remote host ID %s not found.", uuid.String())
+				// 	break peerLoop
+				// }
+				peerToken = data
 				// Now we connect to the remote
-				remote, err = remoteHost.Connect(server.remoteAddressMap[uuid], 256, 0)
+				remotePeer, err = remoteHost.Connect(defaultRemote, 250, 0)
 				if err != nil {
 					log.Printf("Couldn't connect to server: %s\n", err.Error())
-					break peerLoop
-				}
-				err = remote.SendBytes(peerToken, RemoteAdminChannelId, enet.PacketFlagReliable)
-				if err != nil {
-					log.Printf("Couldn't send token to server: %s\n", err.Error())
 					break peerLoop
 				}
 			case <-closeSignal:
@@ -99,10 +93,15 @@ remoteLoop:
 		if ev.GetType() == enet.EventNone {
 			continue
 		}
-
 		switch ev.GetType() {
+		case enet.EventConnect:
+			err = remotePeer.SendBytes(peerToken, RemoteAdminChannelId, enet.PacketFlagReliable)
+			if err != nil {
+				log.Printf("Couldn't send token to server: %s\n", err.Error())
+				break remoteLoop
+			}
 		case enet.EventDisconnect:
-			peer.Disconnect(0)
+			break remoteLoop
 
 		case enet.EventReceive:
 			packet := ev.GetPacket()

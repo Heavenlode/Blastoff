@@ -23,7 +23,7 @@ type BlastoffServer struct {
 }
 
 // This channel is used for the Remote to communicate with the Blastoff server
-const RemoteAdminChannelId = 254
+const RemoteAdminChannelId uint8 = 249
 
 // Commands which the Remote can send to the Blastoff server
 type ServerCommandFlag uint8

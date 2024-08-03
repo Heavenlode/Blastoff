@@ -12,6 +12,7 @@ func CreateServer(address enet.Address) *BlastoffServer {
 	return &BlastoffServer{
 		Address:          address,
 		remoteAddressMap: make(map[uuid.UUID]enet.Address),
+		peerMap:          make(map[enet.Peer]peerData),
 	}
 }
 
@@ -19,15 +20,25 @@ func NewAddress(ip string, port uint16) enet.Address {
 	return enet.NewAddress(ip, port)
 }
 
+var defaultRemote enet.Address
+
 func (server *BlastoffServer) AddRemote(uuid uuid.UUID, address enet.Address) {
 	server.remoteAddressMap[uuid] = address
+	if defaultRemote == nil {
+		defaultRemote = address
+	}
 }
 
 func (server *BlastoffServer) Start() {
 	enet.Initialize()
-	host, err := enet.NewHost(server.Address, 1024, 32, 0, 0)
+	host, err := enet.NewHost(server.Address, 1024, 0, 0, 0)
 	if err != nil {
 		log.Fatalf("Couldn't create host: %s\n", err.Error())
+		return
+	}
+	err = host.CompressWithRangeCoder()
+	if err != nil {
+		log.Fatalf("Couldn't enable compression mode: %s\n", err.Error())
 		return
 	}
 
@@ -61,17 +72,9 @@ func (server *BlastoffServer) Start() {
 				delete(server.peerMap, ev.GetPeer())
 
 			case enet.EventReceive:
-				if ev.GetChannelID() == RemoteAdminChannelId {
-					// Discard messages on this channel, because this is for remotes to communicate with Blastoff
-					// If we were to forward this message to a remote, it would be misinterpreted as a message from Blastoff
-					// Rather than a bridged client message
-					ev.GetPacket().Destroy()
-					log.Printf("Warning: discarded illegal client message")
-				} else {
-					packet := ev.GetPacket()
-					// Forward all other client messages to the remote
-					server.peerMap[ev.GetPeer()].PacketChannel <- bridgePacket{packet, ev.GetChannelID()}
-				}
+				packet := ev.GetPacket()
+				// Forward all client messages to the remote
+				server.peerMap[ev.GetPeer()].PacketChannel <- bridgePacket{packet, ev.GetChannelID()}
 			}
 		}
 		wg.Done()
