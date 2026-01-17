@@ -1,17 +1,20 @@
 package blastoff
 
 import (
-	"github.com/codecat/go-enet"
+	"github.com/Heavenlode/Blastoff/internal/enet"
 	"github.com/google/uuid"
 )
 
 type bridgePacket struct {
-	packet    enet.Packet
+	packet    *enet.Packet
 	channelID uint8
 }
 
+// PeerKey is used as a map key for peers
+type PeerKey uintptr
+
 type peerData struct {
-	Peer          enet.Peer
+	Peer          *enet.Peer
 	PacketChannel chan bridgePacket
 	CloseSignal   chan bool
 }
@@ -19,7 +22,7 @@ type peerData struct {
 type BlastoffServer struct {
 	Address          enet.Address
 	remoteAddressMap map[uuid.UUID]enet.Address
-	peerMap          map[enet.Peer]peerData
+	peerMap          map[PeerKey]peerData
 }
 
 // This channel is used for the Remote to communicate with the Blastoff server

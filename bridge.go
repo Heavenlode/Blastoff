@@ -3,13 +3,13 @@ package blastoff
 import (
 	"log"
 
-	"github.com/codecat/go-enet"
+	"github.com/Heavenlode/Blastoff/internal/enet"
 	"github.com/google/uuid"
 )
 
-func (server *BlastoffServer) bridgePeerToRemote(peer enet.Peer, peerIncomingPacket <-chan bridgePacket, closeSignal <-chan bool) {
+func (server *BlastoffServer) bridgePeerToRemote(peer *enet.Peer, peerIncomingPacket <-chan bridgePacket, closeSignal <-chan bool) {
 	remoteHost, err := enet.NewHost(nil, 100, 0, 0, 0)
-	var remotePeer enet.Peer
+	var remotePeer *enet.Peer
 	if err != nil {
 		log.Fatalf("Couldn't create host: %s", err.Error())
 		return

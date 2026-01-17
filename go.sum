@@ -1,4 +1,2 @@
-github.com/codecat/go-enet v0.0.0-20230124183417-a8586e7e37c4 h1:IfESNBZYAzRQzxcOIUzqpCcYQEaPM9awhFhMV/mi3TQ=
-github.com/codecat/go-enet v0.0.0-20230124183417-a8586e7e37c4/go.mod h1:sGvUVmO/h1mV+TB3h3AA7GBjDX6ZH8DkiF2dcyxPo38=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=

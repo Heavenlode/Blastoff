@@ -4,7 +4,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/codecat/go-enet"
+	"github.com/Heavenlode/Blastoff/internal/enet"
 	"github.com/google/uuid"
 )
 
@@ -12,26 +12,33 @@ func CreateServer(address enet.Address) *BlastoffServer {
 	return &BlastoffServer{
 		Address:          address,
 		remoteAddressMap: make(map[uuid.UUID]enet.Address),
-		peerMap:          make(map[enet.Peer]peerData),
+		peerMap:          make(map[PeerKey]peerData),
 	}
 }
 
 func NewAddress(ip string, port uint16) enet.Address {
-	return enet.NewAddress(ip, port)
+	addr, err := enet.NewAddress(ip, port)
+	if err != nil {
+		log.Fatalf("Failed to create address: %s", err.Error())
+	}
+	return addr
 }
 
 var defaultRemote enet.Address
 
 func (server *BlastoffServer) AddRemote(uuid uuid.UUID, address enet.Address) {
 	server.remoteAddressMap[uuid] = address
-	if defaultRemote == nil {
+	if defaultRemote.GetPort() == 0 {
 		defaultRemote = address
 	}
 }
 
 func (server *BlastoffServer) Start() {
-	enet.Initialize()
-	host, err := enet.NewHost(server.Address, 1024, 0, 0, 0)
+	if err := enet.Initialize(); err != nil {
+		log.Fatalf("Failed to initialize ENet: %s", err.Error())
+		return
+	}
+	host, err := enet.NewHost(&server.Address, 1024, 0, 0, 0)
 	if err != nil {
 		log.Fatalf("Couldn't create host: %s\n", err.Error())
 		return
@@ -58,23 +65,33 @@ func (server *BlastoffServer) Start() {
 
 			switch ev.GetType() {
 			case enet.EventConnect:
-				log.Printf("New peer connected: %s\n", ev.GetPeer().GetAddress())
-				server.peerMap[ev.GetPeer()] = peerData{
-					Peer:          ev.GetPeer(),
+				peer := ev.GetPeer()
+				peerKey := PeerKey(peer.Pointer())
+				log.Printf("New peer connected: %s\n", peer.GetAddress())
+				server.peerMap[peerKey] = peerData{
+					Peer:          peer,
 					PacketChannel: make(chan bridgePacket, 10),
 					CloseSignal:   make(chan bool, 10),
 				}
-				go server.bridgePeerToRemote(ev.GetPeer(), server.peerMap[ev.GetPeer()].PacketChannel, server.peerMap[ev.GetPeer()].CloseSignal)
+				go server.bridgePeerToRemote(peer, server.peerMap[peerKey].PacketChannel, server.peerMap[peerKey].CloseSignal)
 
 			case enet.EventDisconnect:
-				log.Printf("Peer disconnected: %s\n", ev.GetPeer().GetAddress())
-				server.peerMap[ev.GetPeer()].CloseSignal <- true
-				delete(server.peerMap, ev.GetPeer())
+				peer := ev.GetPeer()
+				peerKey := PeerKey(peer.Pointer())
+				log.Printf("Peer disconnected: %s\n", peer.GetAddress())
+				if data, ok := server.peerMap[peerKey]; ok {
+					data.CloseSignal <- true
+					delete(server.peerMap, peerKey)
+				}
 
 			case enet.EventReceive:
+				peer := ev.GetPeer()
+				peerKey := PeerKey(peer.Pointer())
 				packet := ev.GetPacket()
 				// Forward all client messages to the remote
-				server.peerMap[ev.GetPeer()].PacketChannel <- bridgePacket{packet, ev.GetChannelID()}
+				if data, ok := server.peerMap[peerKey]; ok {
+					data.PacketChannel <- bridgePacket{packet, ev.GetChannelID()}
+				}
 			}
 		}
 		wg.Done()
