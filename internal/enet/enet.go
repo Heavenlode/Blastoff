@@ -299,6 +299,14 @@ func (p *Packet) GetLength() int {
 	return int(C.enet_packet_get_length(p.cPacket))
 }
 
+// GetFlags returns the packet flags
+func (p *Packet) GetFlags() PacketFlag {
+	if p.cPacket == nil {
+		return PacketFlagNone
+	}
+	return PacketFlag(p.cPacket.flags)
+}
+
 // Destroy destroys the packet
 func (p *Packet) Destroy() {
 	if p.cPacket != nil {

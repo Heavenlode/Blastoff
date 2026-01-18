@@ -39,13 +39,17 @@ func (server *BlastoffServer) bridgePeerToRemote(peer *enet.Peer, peerIncomingPa
 					log.Printf("Couldn't send token to server: %s\n", err.Error())
 					break peerLoop
 				}
+				remoteHost.Flush()
 			case peerPacket := <-peerIncomingPacket:
 				if peerValidated {
-					// If the peer is already validated, we simply send the packet to the remote
-					if err := remotePeer.SendPacket(peerPacket.packet, peerPacket.channelID); err != nil {
+					// Create a new packet with the same data and flags to avoid ownership issues
+					data := peerPacket.packet.GetData()
+					flags := peerPacket.packet.GetFlags()
+					peerPacket.packet.Destroy()
+					if err := remotePeer.SendBytes(data, peerPacket.channelID, flags); err != nil {
 						log.Printf("Couldn't send packet to server: %s\n", err.Error())
-						peerPacket.packet.Destroy()
 					}
+					remoteHost.Flush()
 					break
 				}
 				// Initialize the connection with the remote host.
@@ -74,6 +78,7 @@ func (server *BlastoffServer) bridgePeerToRemote(peer *enet.Peer, peerIncomingPa
 remoteLoop:
 	for {
 		if closed {
+			log.Println("[Bridge] Closed, exiting remote loop")
 			break
 		}
 		ev := remoteHost.Service(10)
@@ -93,6 +98,7 @@ remoteLoop:
 
 		case enet.EventReceive:
 			packet := ev.GetPacket()
+			// log.Printf("[Bridge] Received from remote: channel=%d, size=%d bytes\n", ev.GetChannelID(), packet.GetLength())
 			if ev.GetChannelID() == RemoteAdminChannelId {
 				var data = packet.GetData()
 				packet.Destroy()
@@ -141,9 +147,13 @@ remoteLoop:
 					log.Println("Client not validated.")
 					break remoteLoop
 				}
-				if err := peer.SendPacket(packet, ev.GetChannelID()); err != nil {
+				// Create a new packet with the same data and flags to avoid ownership issues
+				data := packet.GetData()
+				flags := packet.GetFlags()
+				// log.Printf("[Bridge] Forwarding to client: channel=%d, size=%d bytes, flags=%d\n", ev.GetChannelID(), len(data), flags)
+				packet.Destroy()
+				if err := peer.SendBytes(data, ev.GetChannelID(), flags); err != nil {
 					log.Printf("Couldn't send packet to client: %s\n", err.Error())
-					packet.Destroy()
 				}
 			}
 		}
