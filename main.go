@@ -53,28 +53,21 @@ func (server *BlastoffServer) Start() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		eventCount := 0
+
 		// The main Blastoff server loop
 		// These peers are attempting to connect to remotes
 		for {
-			ev, result := host.Service(10)
-
-			if result < 0 {
-				log.Printf("[Main] Service error: %d\n", result)
-				continue
-			}
+			ev := host.Service(10)
 
 			if ev.GetType() == enet.EventNone {
 				continue
 			}
-			eventCount++
-			log.Printf("[Main] Event #%d: type=%d (result=%d)\n", eventCount, ev.GetType(), result)
 
 			switch ev.GetType() {
 			case enet.EventConnect:
 				peer := ev.GetPeer()
 				peerKey := PeerKey(peer.Pointer())
-				log.Printf("New peer connected: %s (key=%d)\n", peer.GetAddress(), peerKey)
+				log.Printf("New peer connected: %s\n", peer.GetAddress())
 				server.peerMap[peerKey] = peerData{
 					Peer:          peer,
 					PacketChannel: make(chan bridgePacket, 10),
@@ -95,13 +88,12 @@ func (server *BlastoffServer) Start() {
 				peer := ev.GetPeer()
 				peerKey := PeerKey(peer.Pointer())
 				packet := ev.GetPacket()
-				log.Printf("[Main] Received packet from %s (key=%d) on channel %d (%d bytes)\n", peer.GetAddress(), peerKey, ev.GetChannelID(), packet.GetLength())
+				log.Printf("[Main] Received packet from %s on channel %d (%d bytes)\n", peer.GetAddress(), ev.GetChannelID(), packet.GetLength())
 				// Forward all client messages to the remote
 				if data, ok := server.peerMap[peerKey]; ok {
-					log.Printf("[Main] Forwarding to bridge...\n")
 					data.PacketChannel <- bridgePacket{packet, ev.GetChannelID()}
 				} else {
-					log.Printf("[Main] WARNING: No peer data found for %s (key=%d), map has %d entries\n", peer.GetAddress(), peerKey, len(server.peerMap))
+					log.Printf("[Main] WARNING: No peer data found for %s\n", peer.GetAddress())
 				}
 			}
 		}

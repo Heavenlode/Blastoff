@@ -8,7 +8,6 @@ import (
 )
 
 func (server *BlastoffServer) bridgePeerToRemote(peer *enet.Peer, peerIncomingPacket <-chan bridgePacket, closeSignal <-chan bool) {
-	log.Printf("[Bridge] Starting bridge for peer %s\n", peer.GetAddress())
 	remoteHost, err := enet.NewHost(nil, 100, 0, 0, 0)
 	var remotePeer *enet.Peer
 	if err != nil {
@@ -24,13 +23,11 @@ func (server *BlastoffServer) bridgePeerToRemote(peer *enet.Peer, peerIncomingPa
 
 	go func() {
 		// Handle messages to and from the client
-		log.Printf("[Bridge] Waiting for packets from client...\n")
 	peerLoop:
 		for {
 			select {
 			case uuid := <-redirectChan:
 				// The server has indicated that the client should be redirected to another server
-				log.Printf("[Bridge] Redirecting to %s\n", uuid.String())
 				remotePeer.Disconnect(0)
 				remotePeer, err = remoteHost.Connect(server.remoteAddressMap[uuid], 0, 0)
 				if err != nil {
@@ -43,7 +40,6 @@ func (server *BlastoffServer) bridgePeerToRemote(peer *enet.Peer, peerIncomingPa
 					break peerLoop
 				}
 			case peerPacket := <-peerIncomingPacket:
-				log.Printf("[Bridge] Received packet from client on channel %d (validated: %v)\n", peerPacket.channelID, peerValidated)
 				if peerValidated {
 					// If the peer is already validated, we simply send the packet to the remote
 					if err := remotePeer.SendPacket(peerPacket.packet, peerPacket.channelID); err != nil {
@@ -57,7 +53,6 @@ func (server *BlastoffServer) bridgePeerToRemote(peer *enet.Peer, peerIncomingPa
 				// The first part is the UUID of the remote host they wish to connect to
 				// The second part is the token that the remote host will use to verify the connection
 				var data = peerPacket.packet.GetData()
-				log.Printf("[Bridge] Got initial token from client (%d bytes), connecting to remote %s:%d\n", len(data), defaultRemote.String(), defaultRemote.GetPort())
 				peerPacket.packet.Destroy()
 				// if len(data) <= 36 {
 				// 	log.Println("Invalid packet data length")
@@ -89,44 +84,32 @@ func (server *BlastoffServer) bridgePeerToRemote(peer *enet.Peer, peerIncomingPa
 	// Handle incoming messages from the remote
 	// These are messages which the remote sends to the client
 	// Unless coming from channel RemoteAdminChannelId, then it's a message for the Blastoff server
-	log.Printf("[Bridge] Starting remote event loop\n")
 remoteLoop:
 	for {
 		if closed {
-			log.Printf("[Bridge] Client connection closed, exiting remote loop\n")
 			break
 		}
-		ev, result := remoteHost.Service(10)
-		if result < 0 {
-			log.Printf("[Bridge] Remote service error: %d\n", result)
-			continue
-		}
+		ev := remoteHost.Service(10)
 		if ev.GetType() == enet.EventNone {
 			continue
 		}
-		log.Printf("[Bridge] Remote event: %d (result=%d)\n", ev.GetType(), result)
 		switch ev.GetType() {
 		case enet.EventConnect:
-			log.Printf("[Bridge] Connected to remote server! Sending token (%d bytes)\n", len(peerToken))
 			err = remotePeer.SendBytes(peerToken, RemoteAdminChannelId, enet.PacketFlagReliable)
 			if err != nil {
 				log.Printf("Couldn't send token to server: %s\n", err.Error())
 				break remoteLoop
 			}
-			log.Printf("[Bridge] Token sent to remote\n")
 		case enet.EventDisconnect:
-			log.Printf("[Bridge] Disconnected from remote\n")
 			break remoteLoop
 
 		case enet.EventReceive:
 			packet := ev.GetPacket()
-			log.Printf("[Bridge] Received packet from remote on channel %d (%d bytes)\n", ev.GetChannelID(), packet.GetLength())
 			if ev.GetChannelID() == RemoteAdminChannelId {
 				var data = packet.GetData()
 				packet.Destroy()
 				// This is a special communication packet from the server
 				// The first byte indicates the type of packet
-				log.Printf("[Bridge] Admin channel message, command: %d\n", data[0])
 				switch ServerCommandFlag(data[0]) {
 				case ServerCommandNewInstance:
 					// The server is redirecting the client to another server
@@ -142,7 +125,6 @@ remoteLoop:
 					}
 					log.Printf("Spawning new instance: %s\n", uuid.String())
 				case ServerCommandValidateClient:
-					log.Printf("[Bridge] Client validated by remote server!\n")
 					peerValidated = true
 				case ServerCommandRedirectClient:
 					// The client is being redirected to another server
