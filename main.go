@@ -88,12 +88,9 @@ func (server *BlastoffServer) Start() {
 				peer := ev.GetPeer()
 				peerKey := PeerKey(peer.Pointer())
 				packet := ev.GetPacket()
-				log.Printf("[Main] Received packet from %s on channel %d (%d bytes)\n", peer.GetAddress(), ev.GetChannelID(), packet.GetLength())
 				// Forward all client messages to the remote
 				if data, ok := server.peerMap[peerKey]; ok {
 					data.PacketChannel <- bridgePacket{packet, ev.GetChannelID()}
-				} else {
-					log.Printf("[Main] WARNING: No peer data found for %s\n", peer.GetAddress())
 				}
 			}
 		}

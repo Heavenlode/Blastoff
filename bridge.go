@@ -54,19 +54,6 @@ func (server *BlastoffServer) bridgePeerToRemote(peer *enet.Peer, peerIncomingPa
 				// The second part is the token that the remote host will use to verify the connection
 				var data = peerPacket.packet.GetData()
 				peerPacket.packet.Destroy()
-				// if len(data) <= 36 {
-				// 	log.Println("Invalid packet data length")
-				// 	break peerLoop
-				// }
-				// uuid, err := uuid.Parse(string(data[:36]))
-				// if err != nil {
-				// 	log.Printf("Couldn't parse UUID: %s\n", err.Error())
-				// 	break peerLoop
-				// }
-				// if _, ok := server.remoteAddressMap[uuid]; !ok {
-				// 	log.Printf("Remote host ID %s not found.", uuid.String())
-				// 	break peerLoop
-				// }
 				peerToken = data
 				// Now we connect to the remote
 				remotePeer, err = remoteHost.Connect(defaultRemote, 250, 0)
@@ -100,6 +87,7 @@ remoteLoop:
 				log.Printf("Couldn't send token to server: %s\n", err.Error())
 				break remoteLoop
 			}
+			remoteHost.Flush()
 		case enet.EventDisconnect:
 			break remoteLoop
 
