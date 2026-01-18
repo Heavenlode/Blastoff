@@ -150,10 +150,11 @@ func (h *Host) Connect(address Address, channelCount int, data uint32) (*Peer, e
 }
 
 // Service waits for events and dispatches them
-func (h *Host) Service(timeout uint32) Event {
+// Returns the event and a status code (>0 = event, 0 = no event, <0 = error)
+func (h *Host) Service(timeout uint32) (Event, int) {
 	ev := Event{}
-	C.enet_host_service(h.cHost, &ev.cEvent, C.uint32_t(timeout))
-	return ev
+	result := C.enet_host_service(h.cHost, &ev.cEvent, C.uint32_t(timeout))
+	return ev, int(result)
 }
 
 // Flush sends any queued packets

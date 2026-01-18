@@ -96,11 +96,15 @@ remoteLoop:
 			log.Printf("[Bridge] Client connection closed, exiting remote loop\n")
 			break
 		}
-		ev := remoteHost.Service(10)
+		ev, result := remoteHost.Service(10)
+		if result < 0 {
+			log.Printf("[Bridge] Remote service error: %d\n", result)
+			continue
+		}
 		if ev.GetType() == enet.EventNone {
 			continue
 		}
-		log.Printf("[Bridge] Remote event: %d\n", ev.GetType())
+		log.Printf("[Bridge] Remote event: %d (result=%d)\n", ev.GetType(), result)
 		switch ev.GetType() {
 		case enet.EventConnect:
 			log.Printf("[Bridge] Connected to remote server! Sending token (%d bytes)\n", len(peerToken))
